@@ -1,0 +1,204 @@
+import streamlit as st
+import datetime
+import pandas as pd
+
+# --- 核心資料結構初始化與狀態管理 ---
+
+# 檢查並初始化 Session State 中的資料結構
+def initialize_session_state():
+    """初始化 Streamlit Session State 中的記帳本。"""
+    if 'exchange_book' not in st.session_state:
+        st.session_state.exchange_book = [
+            # 初始兌換紀錄
+            {
+                "date": "2025-12-16", 
+                "TWD_amount": 10000.0,
+                "JPY_amount": 50000.0,
+                "exchange_rate": 0.2000,
+                "notes": "首次兌換"
+            }
+        ]
+    if 'expense_book' not in st.session_state:
+        st.session_state.expense_book = []
+
+# --- A. 換匯紀錄管理函數 (調整為使用 Session State) ---
+def calculate_average_rate():
+    """計算並回傳平均換匯成本率 (TWD/JPY)。"""
+    exchange_book = st.session_state.exchange_book
+    if not exchange_book:
+        return 0.0
+
+    total_twd = sum(item["TWD_amount"] for item in exchange_book)
+    total_jpy = sum(item["JPY_amount"] for item in exchange_book)
+
+    return total_twd / total_jpy if total_jpy > 0 else 0.0
+
+def add_exchange_record(date, twd, jpy, notes=""):
+    """新增一筆兌換紀錄，並計算匯率。"""
+    if twd > 0 and jpy > 0:
+        rate = twd / jpy
+        new_record = {
+            "date": date.strftime('%Y-%m-%d'),
+            "TWD_amount": twd,
+            "JPY_amount": jpy,
+            "exchange_rate": round(rate, 4), 
+            "notes": notes
+        }
+        st.session_state.exchange_book.append(new_record)
+        st.success(f"✅ 成功新增換匯紀錄: {twd:,.2f} TWD 兌換 {jpy:,.0f} JPY, 匯率為 {round(rate, 4)}")
+    else:
+        st.error("❌ 換匯金額輸入必須大於零。")
+
+# --- B. 消費記帳與換算函數 ---
+def add_expense_record(date, jpy_amount, description):
+    """新增一筆日幣消費紀錄，並自動換算成台幣成本。"""
+    if jpy_amount <= 0:
+        st.error("❌ 消費金額必須大於零。")
+        return
+    
+    avg_rate = calculate_average_rate()
+    
+    if avg_rate == 0:
+        twd_cost = 0.0
+    else:
+        twd_cost = jpy_amount * avg_rate
+
+    new_expense = {
+        "date": date.strftime('%Y-%m-%d'),
+        "JPY_amount": jpy_amount,
+        "TWD_cost": round(twd_cost, 2),
+        "description": description,
+        "rate_used": round(avg_rate, 4)
+    }
+    st.session_state.expense_book.append(new_expense)
+    st.success(f"✅ 新增消費: **{description}**")
+    st.info(f"日幣花費: ¥{jpy_amount:,.0f} -> **台幣成本: ${round(twd_cost, 2):,}** (使用匯率: {round(avg_rate, 4)})")
+
+
+# --- C. 網頁介面顯示函數 ---
+def display_summary():
+    """顯示總結資訊。"""
+    exchange_book = st.session_state.exchange_book
+    expense_book = st.session_state.expense_book
+    
+    total_twd_exchanged = sum(item["TWD_amount"] for item in exchange_book)
+    total_jpy_received = sum(item["JPY_amount"] for item in exchange_book)
+    total_jpy_spent = sum(item["JPY_amount"] for item in expense_book)
+    total_twd_spent_cost = sum(item["TWD_cost"] for item in expense_book)
+    
+    remaining_jpy = total_jpy_received - total_jpy_spent
+    avg_rate = calculate_average_rate()
+
+    st.subheader("📊 記帳總覽")
+    
+    # 使用 Streamlit 的 columns 排版
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="**平均換匯成本 (TWD/JPY)**",
+            value=f"{avg_rate:.4f}"
+        )
+    with col2:
+        st.metric(
+            label="**總換得日幣**",
+            value=f"¥{total_jpy_received:,.0f}"
+        )
+    with col3:
+        # 根據餘額顯示不同顏色
+        if remaining_jpy >= 0:
+            st.metric(
+                label="**剩餘日幣**",
+                value=f"¥{remaining_jpy:,.0f}"
+            )
+        else:
+             st.metric(
+                label="**剩餘日幣 (超支)**",
+                value=f"¥{remaining_jpy:,.0f}",
+                delta="請注意超支",
+                delta_color="inverse"
+            )
+
+    st.markdown("---")
+    
+    col4, col5 = st.columns(2)
+    with col4:
+        st.metric(
+            label="總換匯台幣金額",
+            value=f"${total_twd_exchanged:,.2f}"
+        )
+    with col5:
+        st.metric(
+            label="總台幣消費成本",
+            value=f"${round(total_twd_spent_cost, 2):,}"
+        )
+        
+    return remaining_jpy # 回傳剩餘金額
+
+def display_all_records():
+    """顯示詳細的換匯與消費紀錄。"""
+    
+    st.subheader("💰 換匯紀錄")
+    if st.session_state.exchange_book:
+        df_exchange = pd.DataFrame(st.session_state.exchange_book)
+        st.dataframe(df_exchange, hide_index=True, use_container_width=True)
+    else:
+        st.info("目前沒有任何換匯紀錄。")
+
+    st.subheader("💸 詳細消費紀錄")
+    if st.session_state.expense_book:
+        df_expense = pd.DataFrame(st.session_state.expense_book)
+        # 重新命名欄位以便於閱讀
+        df_expense.columns = ["日期", "日幣花費 (JPY)", "台幣成本 (TWD)", "描述", "換算匯率"]
+        st.dataframe(df_expense, hide_index=True, use_container_width=True)
+    else:
+        st.info("目前沒有任何消費紀錄。")
+
+
+# --- D. 應用程式主體 (Main App) ---
+def main_app():
+    """Streamlit 應用程式的主體。"""
+    
+    st.set_page_config(layout="wide", page_title="旅遊換匯記帳本")
+    st.title("✈️ 旅遊換匯記帳本")
+    st.caption("使用平均成本法計算消費的台幣成本")
+
+    initialize_session_state()
+
+    # 側邊欄用於新增紀錄
+    with st.sidebar:
+        st.header("功能選單")
+        
+        # --- 1. 新增換匯紀錄 ---
+        st.markdown("### 💰 新增換匯")
+        exchange_date = st.date_input("日期", value=datetime.date.today(), key='ex_date')
+        twd_input = st.number_input("兌換的台幣 (TWD) 金額", min_value=0.0, step=100.0, key='ex_twd')
+        jpy_input = st.number_input("換得的日幣 (JPY) 金額", min_value=0.0, step=1000.0, key='ex_jpy')
+        notes_input = st.text_input("備註 (可選)", key='ex_notes')
+        
+        if st.button("💾 記錄換匯"):
+            add_exchange_record(exchange_date, twd_input, jpy_input, notes_input)
+            
+        st.markdown("---")
+        
+        # --- 2. 新增消費紀錄 ---
+        st.markdown("### 💸 新增消費")
+        expense_date = st.date_input("日期", value=datetime.date.today(), key='exp_date')
+        description_input = st.text_input("消費項目描述", key='exp_desc')
+        jpy_exp_input = st.number_input("日幣 (JPY) 花費金額", min_value=0.0, step=100.0, key='exp_jpy')
+        
+        if st.button("🛒 記錄消費"):
+            remaining_jpy = display_summary() # 為了取得最新的剩餘金額
+            # 簡單的超支檢查 (Streamlit 會在頁面刷新時重新計算)
+            if st.session_state.exchange_book and jpy_exp_input > 0 and jpy_exp_input > remaining_jpy:
+                st.warning(f"⚠️ 警告：消費 ¥{jpy_exp_input:,.0f} 超過剩餘日幣。")
+
+            add_expense_record(expense_date, jpy_exp_input, description_input)
+
+    # 主頁面顯示總覽和紀錄
+    display_summary()
+    st.markdown("---")
+    display_all_records()
+
+if __name__ == "__main__":
+    main_app()
